@@ -1,7 +1,7 @@
-#define MDB1 10
-#define MDB2 11    //frente direit
-#define MEB1 9
-#define MEB2 6     //frente esquerd
+#define TDIR 10  //trás direita
+#define FDIR 11  //frente direita
+#define TESQ 9   //trás esquerda
+#define FESQ 6   //frente esquerda
 #define LD A2
 #define CD A3
 #define CE A4
@@ -9,8 +9,13 @@
 #define BUT 7
 #define LED 12
 
-#include "math.h"
+#include <Arduino.h>
+#include <math.h>
 
+enum bobinas {TDIR_,FDIR_,TESQ_,FESQ_};
+enum sensores {LD_,CD_,CE_,LE_};
+
+//VARIÁVEIS GLOBAIS
 int ultEstadoBotao;
 int botao;
 int tempo = 0;
@@ -19,24 +24,23 @@ int pwm_increment = 0;
 int acell;
 bool ligado;
 
-int valorLE;
-int valorCE;
-int valorCD;
-int valorLD;
+struct sensoresLeitura {
+  int valorLD;
+  int valorCD;
+  int valorCE;
+  int valorLE;
+} leituras;
   
 void setup() {
   // put your setup code here, to run once:
   Serial.begin(9600);
-  //motor
-  pinMode(MDB1,OUTPUT);
-  pinMode(MDB2,OUTPUT);
-  pinMode(MEB1,OUTPUT);
-  pinMode(MEB2,OUTPUT);
-  //sensor
-  pinMode(LD,INPUT);
-  pinMode(LE,INPUT);
-  pinMode(CE,INPUT);
-  pinMode(CD,INPUT);
+  // Inicializa as bobinas como saída e os sensores como entrada
+  for (size_t i = 0; i < 4; i++)
+  {
+    pinMode(bobinas(i),OUTPUT);
+    pinMode(bobinas(i),LOW);
+    pinMode(sensores(i),INPUT);
+  }
   pinMode(BUT,INPUT);
   //LED
   pinMode(LED,OUTPUT);
