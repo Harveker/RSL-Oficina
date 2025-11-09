@@ -8,7 +8,10 @@
 #define LE A5
 #define BUT 7
 #define LED 12
-
+#define TMDF 90  // porcentagem de trim do motor direito frente
+#define TMDT 90  // porcentagem de trim do motor direito tras
+#define TMEF 100 // porcentagem de trim do motor esquerdo frente
+#define TMET 100 // porcentagem de trim do motor esquerdo tras
 #include <Arduino.h>
 #include <math.h>
 #include "AcksenButton.h"
@@ -18,20 +21,22 @@
 // Struct para controle das I/Os do robô
 struct controlIO
 {
-  enum Bobinas
+  enum Bobinas // enumerando para facilitar a identificação das bobinas
   {
     TDIR_,
     FDIR_,
     TESQ_,
     FESQ_
-  }; // enumerando para facilitar a identificação das bobinas
-  enum Sensores
+  };
+
+  enum Sensores // enumerando para facilitar a identificação dos sensores
   {
     LD_,
     CD_,
     CE_,
     LE_
-  }; // enumerando para facilitar a identificação dos sensores
+  };
+  const int trimMotores[4] = {TMDF, TMDT, TMEF, TMET}; // array com os trims dos motores
   int bobinas[4] = {TDIR_, FDIR_, TESQ_, FESQ_};       // array com as bobinas
   int sensores[4] = {LD_, CD_, CE_, LE_};              // array com os sensores
   char debugsensores[4][3] = {"LD", "CD", "CE", "LE"}; // array com os nomes dos sensores para debug
@@ -41,6 +46,9 @@ struct controlIO
 // CONSTANTES GLOBAIS-------------------------------------------------------------------------------------------------------------------------------
 const int DURACAO = 1000;      // duração de um ciclo completo em ms
 const int SENSIBILIDADE = 650; // sensibilidade do controle de linha
+const int TMD = 90;            // porcentagem de trim do motor direito
+const int TME = 100;           // porcentagem de trim do motor esquerdo
+const int LONGPRESS = 2000;    // tempo em ms para considerar um long press
 
 // VARIÁVEIS GLOBAIS-------------------------------------------------------------------------------------------------------------------------------
 float acellCrescente = 0;
@@ -53,21 +61,34 @@ bool ligado;
 const unsigned long debounce = 50; // debounce do botão em ms
 
 // FUNÇÕES AUXILIARES-------------------------------------------------------------------------------------------------------------------------------
-void controleDirecao(int direitaFrente, int direitaTras, int esquerdaFrente, int esquerdaTras); // função para controlar a direção do robô
+// função para controlar a direção do robô
+void controleDirecao(int direitaFrente, int direitaTras, int esquerdaFrente, int esquerdaTras);
+// função para mover o robô para frente
 void frente();
+// função para mover o robô para trás
 void tras();
+// função para parar o robô
 void parar();
+// função para girar o robô para a esquerda
+void esquerdaSuave();
+// função para girar o robô para a direita
+void direitaSuave();
+// função para girar o robô para a esquerda
 void esquerda();
+// função para girar o robô para a direita
 void direita();
+// função para ler os sensores
 void leituras();
-int calibracaoMotores(int pwm, int porcentagemTrim); // função para calibrar os motores com base em uma porcentagem de trim
-int trim(int pwm, int porcentagemTrim);              // função para aplicar o trim ao valor do PWM
-
+// função para calibrar os motores com base na porcentagem de trim
+void calibracaoMotores(int pwm, const int porcentagemTrim[4]);
+// função para aplicar o trim ao valor de pwm
+int trim(int pwm, int porcentagemTrim);
+// função para verificar se a parada foi sensoriada
+bool paradaSensoriada();
 // INSTÂNCIAS-------------------------------------------------------------------------------------------------------------------------------
 
-cIO robo;                                                             // instancia do struct de controle de I/O
-AcksenButton button(BUT, ACKSEN_BUTTON_MODE_NORMAL, debounce, INPUT); // instancia do botão
-
+cIO robo;                                                                // instancia do struct de controle de I/O
+AcksenButton button(BUT, ACKSEN_BUTTON_MODE_LONGPRESS, debounce, INPUT); // instancia do botão
 //--------------------------------------------------------------------SETUP--------------------------------------------------------//-------------------------------
 void setup()
 {
@@ -84,16 +105,23 @@ void setup()
     // Inicializa variáveis
     digitalWrite(LED, LOW);
   }
+  // Cálculo das acelerações oscilatórias - pode se colocar essas funções no geogebra para visualizar melhor o comportamento
+  tempo_motor = (millis() % DURACAO) / (float)DURACAO;                       // tempo do motor varia de 0 a 1 em um ciclo de DURACAO ms
+  acellCrescente = ((0.5) * sin(M_PI * tempo_motor) + 0.5);                  // aceleração 1 é o inverso da aceleração 2
+  acellDecrescente = ((0.5) * cos((M_PI / 2) + (M_PI * tempo_motor)) + 0.5); // aceleração 2 é o inverso da aceleração 1
+  // Cálculo das acelerações lineares
+  // int acell1 = ((tempoatual - tempo)/5)*255;
+  // int acell2 = ((tempoatual - tempo)/5)*255;
+  button.setLongPressInterval(LONGPRESS); // define o intervalo de long press para 2 segundos
 }
 //--------------------------------------------------------------------LOOP--------------------------------------------------------//-------------------------------
 void loop()
 {
-  // put your main code here, to run repeatedly:
   leituras();             // função para ler os sensores
   button.refreshStatus(); // atualiza o estado do botão
-  tempoatual = millis() / 1000;
+  tempoatual = millis();  // atualiza o tempo atual em milissegundos
 
-  if (tempoatual - tempo > 1)
+  if (tempoatual - tempo > 1000)
   {                                // a cada 1 segundo
     for (size_t i = 0; i < 4; i++) // loop para imprimir os valores dos sensores
     {
@@ -104,74 +132,75 @@ void loop()
     }
   }
 
-  // Cálculo das acelerações oscilatórias
-  acellCrescente = ((0.5) * sin(tempo_motor) + 0.5);                  // aceleração 1 é o inverso da aceleração 2
-  acellDecrescente = ((0.5) * cos((M_PI / 2) + (tempo_motor)) + 0.5); // aceleração 2 é o inverso da aceleração 1
-
-  // Cálculo das acelerações lineares
-  // int acell1 = ((tempoatual - tempo)/5)*255;
-  // int acell2 = ((tempoatual - tempo)/5)*255;
-
   // limita a aceleração máxima
   if (acellCrescente > 255)
-  {
     acellCrescente = 255;
-  }
   if (acellDecrescente > 255)
-  {
     acellDecrescente = 255;
-  }
-  if (button.onPressed())
+
+  //----------------------------------------------------------------CALIBRACAO--------------------------------------------------------//
+  if (button.onLongPress()) // se o botão for pressionado por longo período
   {
-    button.refreshStatus();
+    digitalWrite(LED, HIGH); // acende o LED
+    ligado = true;           // define o estado como ligado
+    Serial.println("Iniciando calibração dos motores...");
+    // momento de calibração dos motores:
+    calibracaoMotores(100, robo.trimMotores);
+    delay(1500);
+    controleDirecao(0, 0, 0, 0);                              // para o robô
+    Serial.println("Robo calibrado e ligado!");
+    button.setButtonOperatingMode(ACKSEN_BUTTON_MODE_NORMAL); // muda o modo do botão para NORMAL
+    button.setLongPressInterval(LONGPRESS);                   // define o intervalo de long press para 2 segundos
+  }
+  if (ligado && button.onPressed()) // se o botão estiver ligado e for pressionado por longo período
+  {                                 // se o botão for pressionado por mais de 2 segundos
+    Serial.println("Robo modo linha ativado!");
+    controleDirecao(0, 0, 0, 0);                              // para o robô
+    digitalWrite(LED, LOW);                                   // apaga o LED
+    button.setButtonOperatingMode(ACKSEN_BUTTON_MODE_NORMAL); // muda o modo do botão para NORMAL
 
-    if (button.onPressed())
-    {                                  // se o botão for pressionado
-      controleDirecao(0, 100, 0, 100); // anda para frente
-      digitalWrite(LED, HIGH);         // acende o LED
-      ligado = true;
-      tempo = millis();
-    }
-    if (ligado)
+    if (robo.readings[cIO::LD_] < SENSIBILIDADE) // se o sensor central direito detectar linha, gira para a esquerda
     {
-      // se o sensor central direito detectar linha, gira para a esquerda
-      if (robo.readings[cIO::CD_] < SENSIBILIDADE)
-      {
-        esquerda();
-      }
-      else if (robo.readings[cIO::CE_] < SENSIBILIDADE)
-      {
-        direita();
-      }
-      else if (robo.readings[cIO::LE_] < SENSIBILIDADE || robo.readings[cIO::LD_] < SENSIBILIDADE)
-      {
-      }
-
-      else
-      {
-        frente();
-      }
+      esquerda();
+    }
+    else if (robo.readings[cIO::LE_] < SENSIBILIDADE) // se o sensor central esquerdo detectar linha, gira para a direita
+    {
+      direita();
+    }
+    else if (robo.readings[cIO::CE_] < SENSIBILIDADE) // se o sensor esquerdo detectar linha, faz uma curva leve para a esquerda
+    {
+      esquerdaSuave();
+    }
+    else if (robo.readings[cIO::CD_] < SENSIBILIDADE) // se o sensor direito detectar linha, faz uma curva leve para a direita
+    {
+      direitaSuave();
+    }
+    else if (paradaSensoriada())  // se todos os sensores detectarem linha, para o robô
+    {
+      parar();
+    }
+    else                        // se nenhum sensor detectar linha, segue
+    {
+      frente();
     }
   }
 }
 // FUNÇÕES AUXILIARES
-int trim(int pwm, int porcentagemTrim)
+int trim(int pwm, int porcentagemTrim)  // Calcula o valor do PWM com base na porcentagem de trim
 {
-  // Calcula o valor do PWM com base na porcentagem de trim
   long pwmCalibrado = (long)pwm * porcentagemTrim / 100;
   return constrain(pwmCalibrado, 0, 255);
 }
 
-void calibracaoMotores(int pwm, int porcentagemTrim[])
+void calibracaoMotores(int pwm, const int porcentagemTrim[4])    // Calibra os motores com base na porcentagem de trim
 {
-  // Calibra os motores com base na porcentagem de trim
-  int pwmCalibrado[4];
   for (size_t i = 0; i < 4; i++)
   {
-    pwmCalibrado[i] = trim(pwm, porcentagemTrim[i]);
+    int pwmCalibrado = trim(pwm, porcentagemTrim[i]);
+    analogWrite(robo.bobinas[i], pwmCalibrado);
   }
-  controleDirecao(pwmCalibrado[0], pwmCalibrado[1], pwmCalibrado[2], pwmCalibrado[3]);
 }
+
 void controleDirecao(int direitaFrente, int direitaTras, int esquerdaFrente, int esquerdaTras)
 {
   analogWrite(FDIR, direitaFrente);
@@ -179,6 +208,7 @@ void controleDirecao(int direitaFrente, int direitaTras, int esquerdaFrente, int
   analogWrite(FESQ, esquerdaFrente);
   analogWrite(TESQ, esquerdaTras);
 }
+
 // Funções de movimento - basicas, como otimizar?
 // note que os valores de PWM vão de 0 a 255 - estamos usando valores menores.
 void frente()
@@ -197,10 +227,34 @@ void esquerda()
 {
   controleDirecao(0, 100, 100, 0);
 }
+void esquerdaSuave()
+{
+  controleDirecao(50, 0, 100, 0);
+}
 void direita()
 {
   controleDirecao(100, 0, 0, 100);
 }
+void direitaSuave()
+{
+  controleDirecao(100, 0, 50, 0);
+}
+bool paradaSensoriada()
+{
+  // se todos os sensores detectarem linha (valor abaixo da sensibilidade), retorna true
+  if (robo.readings[cIO::LD_] < SENSIBILIDADE &&
+      robo.readings[cIO::CD_] < SENSIBILIDADE &&
+      robo.readings[cIO::CE_] < SENSIBILIDADE &&
+      robo.readings[cIO::LE_] < SENSIBILIDADE)
+  {
+    return true;
+  }
+  else
+  {
+    return false;
+  }
+}
+
 // Função para ler os sensores
 void leituras()
 {
