@@ -2,13 +2,13 @@
 #define FDIR 11 // frente direita
 #define TESQ 9  // trás esquerda
 #define FESQ 6  // frente esquerda
-#define LD A2
-#define CD A3
-#define CE A4
-#define LE A5
-#define BUT 7
-#define LED 12
-#define TMDF 90  // porcentagem de trim do motor direito frente
+#define LD A2 // sensor lateral direito
+#define CD A3 // sensor central direito
+#define CE A4 // sensor central esquerdo
+#define LE A5 // sensor lateral esquerdo
+#define BUT 7 // botão
+#define LED 12 // LED
+#define TMDF 90 // porcentagem de trim do motor direito frente
 #define TMDT 90  // porcentagem de trim do motor direito tras
 #define TMEF 100 // porcentagem de trim do motor esquerdo frente
 #define TMET 100 // porcentagem de trim do motor esquerdo tras
@@ -36,7 +36,7 @@ struct controlIO
     CE_,
     LE_
   };
-  const int trimMotores[4] = {TMDF, TMDT, TMEF, TMET}; // array com os trims dos motores
+  const int trimMotores[4] = {TMDT, TMDF, TMET, TMEF}; // array com os trims dos motores
   int bobinas[4] = {TDIR_, FDIR_, TESQ_, FESQ_};       // array com as bobinas
   int sensores[4] = {LD_, CD_, CE_, LE_};              // array com os sensores
   char debugsensores[4][3] = {"LD", "CD", "CE", "LE"}; // array com os nomes dos sensores para debug
@@ -46,9 +46,10 @@ struct controlIO
 // CONSTANTES GLOBAIS-------------------------------------------------------------------------------------------------------------------------------
 const int DURACAO = 1000;      // duração de um ciclo completo em ms
 const int SENSIBILIDADE = 650; // sensibilidade do controle de linha
-const int TMD = 90;            // porcentagem de trim do motor direito
-const int TME = 100;           // porcentagem de trim do motor esquerdo
 const int LONGPRESS = 2000;    // tempo em ms para considerar um long press
+const int VELOCIDADE = 100; // velocidade do motor
+const int VELOCIDADE_CURVA = 150; // velocidade do motor em curvas
+const int VELOCIDADE_SUAVE = 100; // velocidade do motor em curvas suaves
 
 // VARIÁVEIS GLOBAIS-------------------------------------------------------------------------------------------------------------------------------
 float acellCrescente = 0;
@@ -83,6 +84,8 @@ void leituras();
 void calibracaoMotores(int pwm, const int porcentagemTrim[4]);
 // função para aplicar o trim ao valor de pwm
 int trim(int pwm, int porcentagemTrim);
+// função para verificar se apenas um sensor está detectando linha
+bool apenasUmSensor(int indiceSensor);
 // função para verificar se a parada foi sensoriada
 bool paradaSensoriada();
 // INSTÂNCIAS-------------------------------------------------------------------------------------------------------------------------------
@@ -92,7 +95,7 @@ AcksenButton button(BUT, ACKSEN_BUTTON_MODE_LONGPRESS, debounce, INPUT); // inst
 //--------------------------------------------------------------------SETUP--------------------------------------------------------//-------------------------------
 void setup()
 {
-  Serial.begin(9600);
+  Serial.begin(115200); // inicializa a comunicação serial
   // Inicializa as bobinas como saída e os sensores como entrada
   for (size_t i = 0; i < 4; i++) // pode se criar uma função para isso algo como robo.init();
   {
@@ -117,6 +120,7 @@ void setup()
 //--------------------------------------------------------------------LOOP--------------------------------------------------------//-------------------------------
 void loop()
 {
+  // Atualizações gerais
   leituras();             // função para ler os sensores
   button.refreshStatus(); // atualiza o estado do botão
   tempoatual = millis();  // atualiza o tempo atual em milissegundos
@@ -142,7 +146,6 @@ void loop()
   if (button.onLongPress()) // se o botão for pressionado por longo período
   {
     digitalWrite(LED, HIGH); // acende o LED
-    ligado = true;           // define o estado como ligado
     Serial.println("Iniciando calibração dos motores...");
     // momento de calibração dos motores:
     calibracaoMotores(100, robo.trimMotores);
@@ -152,32 +155,35 @@ void loop()
     button.setButtonOperatingMode(ACKSEN_BUTTON_MODE_NORMAL); // muda o modo do botão para NORMAL
     button.setLongPressInterval(LONGPRESS);                   // define o intervalo de long press para 2 segundos
   }
-  if (ligado && button.onPressed()) // se o botão estiver ligado e for pressionado por longo período
+
+  //----------------------------------------------------------------CONTROLE DE LINHA--------------------------------------------------------//
+  if (ligado || button.onPressed()) // se o botão estiver ligado e for pressionado por longo período
   {                                 // se o botão for pressionado por mais de 2 segundos
+    ligado = true;           // define o estado como ligado
     Serial.println("Robo modo linha ativado!");
-    controleDirecao(0, 0, 0, 0);                              // para o robô
     digitalWrite(LED, LOW);                                   // apaga o LED
     button.setButtonOperatingMode(ACKSEN_BUTTON_MODE_NORMAL); // muda o modo do botão para NORMAL
 
-    if (robo.readings[cIO::LD_] < SENSIBILIDADE) // se o sensor central direito detectar linha, gira para a esquerda
-    {
-      esquerda();
-    }
-    else if (robo.readings[cIO::LE_] < SENSIBILIDADE) // se o sensor central esquerdo detectar linha, gira para a direita
+    if (apenasUmSensor(cIO::LD_)) // se o sensor central direito detectar linha, gira para a direita
     {
       direita();
     }
-    else if (robo.readings[cIO::CE_] < SENSIBILIDADE) // se o sensor esquerdo detectar linha, faz uma curva leve para a esquerda
+    else if (apenasUmSensor(cIO::LE_)) // se o sensor central esquerdo detectar linha, gira para a esquerda
+    {
+      esquerda();
+    }
+    else if (apenasUmSensor(cIO::CE_)) // se o sensor esquerdo detectar linha, faz uma curva leve para a esquerda
     {
       esquerdaSuave();
     }
-    else if (robo.readings[cIO::CD_] < SENSIBILIDADE) // se o sensor direito detectar linha, faz uma curva leve para a direita
+    else if (apenasUmSensor(cIO::CD_)) // se o sensor direito detectar linha, faz uma curva leve para a direita
     {
       direitaSuave();
     }
     else if (paradaSensoriada())  // se todos os sensores detectarem linha, para o robô
     {
       parar();
+      ligado = false;           // define o estado como desligado
     }
     else                        // se nenhum sensor detectar linha, segue
     {
@@ -211,33 +217,47 @@ void controleDirecao(int direitaFrente, int direitaTras, int esquerdaFrente, int
 
 // Funções de movimento - basicas, como otimizar?
 // note que os valores de PWM vão de 0 a 255 - estamos usando valores menores.
+// aqui também podemos aplicar o trim dos motores
 void frente()
 {
-  controleDirecao(100, 0, 100, 0);
+  //Serial.println("Movendo para frente");
+  //controleDirecao(100, 0, 100,0 );
+  controleDirecao(trim(VELOCIDADE, robo.trimMotores[0]), 0, trim(VELOCIDADE, robo.trimMotores[2]), 0); //-- exemplo com trim
 }
 void tras()
 {
-  controleDirecao(0, 100, 0, 100);
+  //Serial.println("Movendo para tras");
+  //controleDirecao(0, 100, 0, 100);
+  controleDirecao(0, trim(VELOCIDADE, robo.trimMotores[1]), 0, trim(VELOCIDADE, robo.trimMotores[3]));
 }
 void parar()
 {
+  //Serial.println("Parando o robo");
   controleDirecao(0, 0, 0, 0);
 }
 void esquerda()
 {
-  controleDirecao(0, 100, 100, 0);
+  //Serial.println("Movendo para esquerda");
+  //controleDirecao(100, 0, 0, 100);
+  controleDirecao(trim(VELOCIDADE, robo.trimMotores[0]), 0, 0, 0);
 }
 void esquerdaSuave()
 {
-  controleDirecao(50, 0, 100, 0);
+  //Serial.println("Movendo para esquerda suave");
+  //controleDirecao(175, 0, 100, 0);
+  controleDirecao(trim(VELOCIDADE, robo.trimMotores[0]), 0, trim(VELOCIDADE_CURVA, robo.trimMotores[2]), 0);
 }
 void direita()
 {
-  controleDirecao(100, 0, 0, 100);
+  //Serial.println("Movendo para direita");
+  //controleDirecao(0, 100, 100, 0);
+  controleDirecao(0, 0, trim(VELOCIDADE, robo.trimMotores[2]), 0);
 }
 void direitaSuave()
 {
-  controleDirecao(100, 0, 50, 0);
+  //Serial.println("Movendo para direita suave");
+  //controleDirecao(100, 0, 100, 0);
+  controleDirecao(trim(VELOCIDADE_CURVA, robo.trimMotores[0]), 0, trim(VELOCIDADE, robo.trimMotores[2]), 0);
 }
 bool paradaSensoriada()
 {
@@ -255,6 +275,28 @@ bool paradaSensoriada()
   }
 }
 
+bool apenasUmSensor(int indiceSensor)
+{
+  for (int i = 0; i < 4; i++)
+  {
+    if (i == indiceSensor)
+    {
+      if (robo.readings[i] >= SENSIBILIDADE)  // se for o sensor especificado
+      {
+        return false; // o sensor especificado não está detectando linha
+      }
+    }
+    else
+    {
+      if (robo.readings[i] < SENSIBILIDADE)  // se for outro sensor
+      {
+        return false; // outro sensor está detectando linha
+      }
+    }
+  }
+  return true; // apenas o sensor especificado está detectando linha
+}
+  
 // Função para ler os sensores
 void leituras()
 {
