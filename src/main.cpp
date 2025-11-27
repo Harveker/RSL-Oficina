@@ -45,11 +45,12 @@ struct controlIO
 
 // CONSTANTES GLOBAIS-------------------------------------------------------------------------------------------------------------------------------
 const int DURACAO = 1000;         // duração de um ciclo completo em ms
-const int SENSIBILIDADE = 850;    // sensibilidade do controle de linha
+const int SENSIBILIDADE = 650;    // sensibilidade do controle de linha
 const int LONGPRESS = 2000;       // tempo em ms para considerar um long press
-const int VELOCIDADE = 200;       // velocidade do motor
-const int VELOCIDADE_CURVA = 20; // velocidade do motor em curvas
-const int VELOCIDADE_SUAVE = 150; // velocidade do motor em curvas suaves
+const int VELOCIDADE = 255;       // velocidade do motor
+const int VELOCIDADE_CURVA = 150; // velocidade do motor em curvas
+const int VELOCIDADE_SUAVE = 120; // velocidade do motor em curvas suaves
+const int VELOCIDADE_SUAVE_CURVA = 100; // velocidade do motor em curvas suaves
 
 // VARIÁVEIS GLOBAIS-------------------------------------------------------------------------------------------------------------------------------
 float acellCrescente = 0;
@@ -165,6 +166,7 @@ void loop()
     Serial.println("Robo modo linha ativado!");
     digitalWrite(LED, LOW);                                   // apaga o LED
     button.setButtonOperatingMode(ACKSEN_BUTTON_MODE_NORMAL); // muda o modo do botão para NORMAL
+    frente();
 
     if (apenasUmSensor(cIO::LD_)) // se o sensor central direito detectar linha, gira para a direita
     {
@@ -178,9 +180,10 @@ void loop()
     }
     else if (apenasUmSensor(cIO::CE_)) // se o sensor esquerdo detectar linha, faz uma curva leve para a esquerda
     {
-      if (estado == 0)
+      if (estado == 0 || estado == 3)
       {
         esquerdaSuave();
+        estado = 4;
       }
       if (estado == 1)
       {
@@ -190,11 +193,12 @@ void loop()
     }
     else if (apenasUmSensor(cIO::CD_)) // se o sensor direito detectar linha, faz uma curva leve para a direita
     {
-      if (estado == 0)
+      if (estado == 0 || estado == 4)
       {
         direitaSuave();
+        estado = 3;
       }
-      if (estado == 1)
+      if (estado == 2)
       {
         direita();
         estado = 0;
@@ -215,10 +219,6 @@ void loop()
       estado = 0;
       parar();
       ligado = false; // define o estado como desligado
-    }
-    else // se nenhum sensor detectar linha, segue
-    {
-      frente();
     }
   }
 }
@@ -270,7 +270,7 @@ void esquerda()
 {
   // Serial.println("Movendo para esquerda");
   // controleDirecao(100, 0, 0, 100);
-  controleDirecao(trim(VELOCIDADE_CURVA, robo.trimMotores[0]), 0, 0, 0);
+  controleDirecao(trim(VELOCIDADE, robo.trimMotores[0]), 0, 0, trim(VELOCIDADE_CURVA, robo.trimMotores[2]));
 }
 void esquerdaSuave()
 {
@@ -284,7 +284,7 @@ void direita()
 {
   // Serial.println("Movendo para direita");
   // controleDirecao(0, 100, 100, 0);
-  controleDirecao(0,0, trim(VELOCIDADE_CURVA, robo.trimMotores[2]), 0);
+  controleDirecao(0,trim(VELOCIDADE_CURVA, robo.trimMotores[2]), trim(VELOCIDADE, robo.trimMotores[2]), 0);
 }
 void direitaSuave()
 {
@@ -293,6 +293,7 @@ void direitaSuave()
   //controleDirecao(0, 0, trim(VELOCIDADE, robo.trimMotores[2]), 0);
   controleDirecao(trim(VELOCIDADE_CURVA, robo.trimMotores[0]), 0, trim(VELOCIDADE, robo.trimMotores[2]), 0);
 }
+
 bool paradaSensoriada()
 {
   // se todos os sensores detectarem linha (valor abaixo da sensibilidade), retorna true
